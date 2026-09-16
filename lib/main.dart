@@ -1,5 +1,6 @@
 // ===== 极简记账 · 入口 =====
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'screens/record_screen.dart';
 import 'screens/report_screen.dart';
@@ -8,12 +9,42 @@ import 'screens/accounts_screen.dart';
 import 'services/database.dart';
 import 'services/notifications.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await appDb.database;
-  await reminder.init();
-  await reminder.refresh();
+
+  // 任何页面构建错误都显示可读信息，而不是白屏
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return Material(
+      color: Colors.white,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            '页面出错：${details.exception}',
+            style: const TextStyle(color: Colors.red),
+          ),
+        ),
+      ),
+    );
+  };
+
+  // 先显示界面，初始化放后台，失败也不影响打开
   runApp(const JizhangApp());
+  _initAsync();
+}
+
+Future<void> _initAsync() async {
+  try {
+    await appDb.database;
+  } catch (e) {
+    debugPrint('DB 初始化失败: $e');
+  }
+  try {
+    await reminder.init();
+    await reminder.refresh();
+  } catch (e) {
+    debugPrint('提醒初始化失败: $e');
+  }
 }
 
 class JizhangApp extends StatelessWidget {

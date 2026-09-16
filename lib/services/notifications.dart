@@ -13,21 +13,31 @@ class ReminderService {
 
   Future<void> init() async {
     tzdata.initializeTimeZones();
-    // 个人自用 App，用户在国内，时区固定东八区（无夏令时）
-    tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
-
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const init = InitializationSettings(android: android);
-    await _plugin.initialize(init);
-    await _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    try {
+      tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
+    } catch (_) {
+      // 时区设置失败则用默认，不阻塞启动
+    }
+    try {
+      const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const init = InitializationSettings(android: android);
+      await _plugin.initialize(init);
+      await _plugin
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    } catch (_) {
+      // 通知初始化失败不影响使用
+    }
   }
 
   /// App 打开 / 记一笔后调用，重新评估 23:00 是否还需要提醒
   Future<void> refresh() async {
-    await _scheduleDaily21();
-    await _scheduleTonight23();
+    try {
+      await _scheduleDaily21();
+      await _scheduleTonight23();
+    } catch (_) {
+      // 忽略单次调度失败
+    }
   }
 
   Future<void> _scheduleDaily21() async {
