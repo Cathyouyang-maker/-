@@ -48,12 +48,11 @@ jobs:
               s = s.replace('compileOptions {',
                             'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
           if 'desugar_jdk_libs' not in s:
-              if 'dependencies {}' in s:
-                  s = s.replace('dependencies {}',
-                                "dependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'\n}")
+              dep = "    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'\n"
+              if 'dependencies {' in s:
+                  s = s.replace('dependencies {', 'dependencies {\n' + dep, 1)
               else:
-                  s = s.replace('dependencies {',
-                                "dependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'", 1)
+                  s = s.rstrip() + "\n\ndependencies {\n" + dep + "}\n"
           open(p, 'w', encoding='utf-8').write(s)
           PY
 
