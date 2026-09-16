@@ -68,7 +68,7 @@ class AppDb {
   }
 
   /// 余额变动：sign=+1 入账 / -1 冲销
-  Future<void> _applyBalance(Database db, Txn t, int sign) async {
+  Future<void> _applyBalance(DatabaseExecutor db, Txn t, int sign) async {
     if (t.type == TxnType.transfer) {
       await db.rawUpdate('UPDATE accounts SET balance = balance + ? WHERE id = ?', [-sign * t.amount, t.accountId]);
       if (t.toAccountId != null) {
@@ -85,7 +85,7 @@ class AppDb {
     final db = await database;
     await db.transaction((txn) async {
       await txn.insert('txns', t.toMap());
-      await _applyBalance(txn, 1);
+      await _applyBalance(txn, t, 1);
       if (t.refundOf != null) {
         await txn.update('txns', {'refunded': 1}, where: 'id = ?', whereArgs: [t.refundOf]);
       }
