@@ -39,6 +39,24 @@ jobs:
           open(p, 'w', encoding='utf-8').write(s)
           PY
 
+      - name: Patch build.gradle (flutter_local_notifications 要求开启 desugaring)
+        run: |
+          python3 - <<'PY'
+          p = 'android/app/build.gradle'
+          s = open(p, encoding='utf-8').read()
+          if 'coreLibraryDesugaringEnabled' not in s:
+              s = s.replace('compileOptions {',
+                            'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
+          if 'desugar_jdk_libs' not in s:
+              if 'dependencies {}' in s:
+                  s = s.replace('dependencies {}',
+                                "dependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'\n}")
+              else:
+                  s = s.replace('dependencies {',
+                                "dependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'", 1)
+          open(p, 'w', encoding='utf-8').write(s)
+          PY
+
       - name: Get dependencies
         run: flutter pub get
 
@@ -52,10 +70,10 @@ jobs:
         run: |
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
-          tail -n 200 build.log > build-error.log
+          tail -n 250 build.log > build-error.log
           git add build-error.log
           git commit -m "ci: build error log [skip ci]"
-          git push
+          git push origin HEAD:refs/heads/main
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
