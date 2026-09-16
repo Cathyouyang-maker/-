@@ -1,0 +1,49 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.24.5'
+
+      - name: Generate Android platform files
+        run: flutter create . --platforms android --org com.jizhang --project-name jizhang
+
+      - name: Patch Android manifest (权限 + 应用名)
+        run: |
+          python3 - <<'PY'
+          import re
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p, encoding='utf-8').read()
+          perms = ('<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n'
+                   '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
+                   '    <uses-permission android:name="android.permission.VIBRATE"/>')
+          if 'RECORD_AUDIO' not in s:
+              s = s.replace('<application', perms + '\n    <application', 1)
+          s = re.sub(r'android:label="[^"]*"', 'android:label="极简记账"', s)
+          open(p, 'w', encoding='utf-8').write(s)
+          PY
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: jizhang-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
