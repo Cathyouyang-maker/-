@@ -27,6 +27,7 @@ class _RecordScreenState extends State<RecordScreen> {
   bool _listening = false;
   bool _busy = false;
   bool _speechInited = false;
+  bool _finished = false;
   String _heard = '';
   Timer? _autoStop;
 
@@ -75,7 +76,12 @@ class _RecordScreenState extends State<RecordScreen> {
         final ok = await _speech.initialize(
           onError: (e) => _onSpeechError(e.errorMsg),
           onStatus: (s) {
-            if (s == 'done' || s == 'notListening') _finishVoice();
+            // 收尾前给 finalResult 留缓冲，避免提前判定“没听清”
+            if (s == 'done' || s == 'notListening') {
+              Timer(const Duration(milliseconds: 500), () {
+                if (!_finished) _finishVoice();
+              });
+            }
           },
         );
         _speechInited = true;
@@ -85,11 +91,13 @@ class _RecordScreenState extends State<RecordScreen> {
         }
       }
       _heard = '';
+      _finished = false;
       if (mounted) setState(() => _listening = true);
-      await _speech.listen(
+      final started = await _speech.listen(
         localeId: await _zhLocale(),
+        partialResults: true,
         onResult: (r) {
-          final t = r.recognizedWords.toString();
+          final t = r.recognizedWords;
           if (t.isNotEmpty) {
             _heard = t;
             if (mounted) setState(() => _input.text = t);
@@ -97,6 +105,11 @@ class _RecordScreenState extends State<RecordScreen> {
           if (r.finalResult) _finishVoice();
         },
       );
+      if (started == false) {
+        if (mounted) setState(() => _listening = false);
+        _toast('语音启动不了：可能没装语音识别服务，直接用下面打字也行');
+        return;
+      }
       _autoStop?.cancel();
       _autoStop = Timer(const Duration(seconds: 30), _stopVoice);
     } catch (e) {
@@ -111,6 +124,8 @@ class _RecordScreenState extends State<RecordScreen> {
     try {
       await _speech.stop();
     } catch (_) {}
+    // 等最终识别结果落地再收尾
+    await Future.delayed(const Duration(milliseconds: 350));
     _finishVoice();
   }
 
@@ -126,7 +141,8 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   void _finishVoice() {
-    if (!_listening) return;
+    if (_finished) return;
+    _finished = true;
     _autoStop?.cancel();
     if (mounted) setState(() => _listening = false);
     final text = _heard.trim();
@@ -139,6 +155,7 @@ class _RecordScreenState extends State<RecordScreen> {
 
   void _onSpeechError(String? msg) {
     _autoStop?.cancel();
+    _finished = true;
     if (mounted) setState(() => _listening = false);
     _toast('语音没成功（${msg ?? '未知原因'}），可以直接打字');
   }
