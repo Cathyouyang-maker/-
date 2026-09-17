@@ -43,7 +43,7 @@ jobs:
           print(s)
           PY
 
-      - name: Patch build.gradle (flutter_local_notifications 要求开启 desugaring)
+      - name: Patch build.gradle (desugaring + 固定签名)
         run: |
           python3 - <<'PY'
           p = 'android/app/build.gradle'
@@ -57,8 +57,44 @@ jobs:
                   s = s.replace('dependencies {', 'dependencies {\n' + dep, 1)
               else:
                   s = s.rstrip() + "\n\ndependencies {\n" + dep + "}\n"
+          # 固定签名：注入 signingConfigs.release（从 CI 环境变量读取），并让 release 构建使用它
+          if 'signingConfigs' not in s:
+              block = (
+                  "    signingConfigs {\n"
+                  "        release {\n"
+                  "            storeFile file(System.getenv('KEYSTORE_PATH') ?: 'keystore-dummy.jks')\n"
+                  "            storePassword System.getenv('KEYSTORE_PASSWORD') ?: ''\n"
+                  "            keyAlias System.getenv('KEY_ALIAS') ?: ''\n"
+                  "            keyPassword System.getenv('KEY_PASSWORD') ?: ''\n"
+                  "        }\n"
+                  "    }\n"
+              )
+              s = s.replace('    buildTypes {', block + '    buildTypes {', 1)
+          if 'signingConfig signingConfigs.release' not in s:
+              s = s.replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release')
           open(p, 'w', encoding='utf-8').write(s)
           PY
+
+      - name: Prepare fixed release keystore (首次生成并永久提交，之后所有版本签名一致→可覆盖安装)
+        shell: bash
+        run: |
+          set -e
+          KS="android/app/jizhang-release.keystore"
+          if [ ! -f "$KS" ]; then
+            echo "生成固定签名密钥（仅首次）..."
+            keytool -genkeypair -v -keystore "$KS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias jizhang -storepass jizhang123 -keypass jizhang123 \
+              -dname "CN=Jizhang,OU=App,O=Jizhang,L=CN,S=CN,C=CN"
+            git config user.name "ci-bot"
+            git config user.email "ci-bot@users.noreply.github.com"
+            git add -f "$KS"
+            git commit -m "ci: add fixed release keystore [skip ci]" || true
+            git push origin HEAD:refs/heads/main || true
+          fi
+          echo "KEYSTORE_PATH=$PWD/$KS" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=jizhang123" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=jizhang" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=jizhang123" >> "$GITHUB_ENV"
 
       - name: Get dependencies
         run: flutter pub get
