@@ -3,7 +3,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 import '../models.dart';
 import '../data/categories.dart';
 import '../services/database.dart';
@@ -23,13 +22,6 @@ class _RecordScreenState extends State<RecordScreen> {
   List<Account> _accounts = [];
   List<Txn> _today = [];
   final TextEditingController _input = TextEditingController();
-  final SpeechToText _speech = SpeechToText();
-  bool _listening = false;
-  bool _busy = false;
-  bool _speechInited = false;
-  bool _finished = false;
-  String _heard = '';
-  Timer? _autoStop;
 
   @override
   void initState() {
@@ -39,7 +31,6 @@ class _RecordScreenState extends State<RecordScreen> {
 
   @override
   void dispose() {
-    _autoStop?.cancel();
     _input.dispose();
     super.dispose();
   }
@@ -59,108 +50,7 @@ class _RecordScreenState extends State<RecordScreen> {
     if (mounted) setState(() {});
   }
 
-  // ---------- 语音：点一下开始，再点一下结束 ----------
-  Future<void> _toggleVoice() async {
-    if (_listening) {
-      await _stopVoice();
-    } else {
-      await _startVoice();
-    }
-  }
-
-  Future<void> _startVoice() async {
-    if (_busy) return;
-    _busy = true;
-    try {
-      if (!_speechInited) {
-        final ok = await _speech.initialize(
-          onError: (e) => _onSpeechError(e.errorMsg),
-          onStatus: (s) {
-            // 收尾前给 finalResult 留缓冲，避免提前判定“没听清”
-            if (s == 'done' || s == 'notListening') {
-              Timer(const Duration(milliseconds: 500), () {
-                if (!_finished) _finishVoice();
-              });
-            }
-          },
-        );
-        _speechInited = true;
-        if (!ok) {
-          _toast('语音用不了：请到手机「设置 → 应用 → 极简记账 → 权限」打开麦克风；也可以直接在下面打字');
-          return;
-        }
-      }
-      _heard = '';
-      _finished = false;
-      if (mounted) setState(() => _listening = true);
-      final started = await _speech.listen(
-        localeId: await _zhLocale(),
-        partialResults: true,
-        onResult: (r) {
-          final t = r.recognizedWords;
-          if (t.isNotEmpty) {
-            _heard = t;
-            if (mounted) setState(() => _input.text = t);
-          }
-          if (r.finalResult) _finishVoice();
-        },
-      );
-      if (started == false) {
-        if (mounted) setState(() => _listening = false);
-        _toast('语音启动不了：可能没装语音识别服务，直接用下面打字也行');
-        return;
-      }
-      _autoStop?.cancel();
-      _autoStop = Timer(const Duration(seconds: 30), _stopVoice);
-    } catch (e) {
-      if (mounted) setState(() => _listening = false);
-      _toast('语音启动失败：$e');
-    } finally {
-      _busy = false;
-    }
-  }
-
-  Future<void> _stopVoice() async {
-    try {
-      await _speech.stop();
-    } catch (_) {}
-    // 等最终识别结果落地再收尾
-    await Future.delayed(const Duration(milliseconds: 350));
-    _finishVoice();
-  }
-
-  /// 中文识别器（找不到就用系统默认）
-  Future<String?> _zhLocale() async {
-    try {
-      final locales = await _speech.locales();
-      for (final l in locales) {
-        if (l.localeId.toLowerCase().startsWith('zh')) return l.localeId;
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  void _finishVoice() {
-    if (_finished) return;
-    _finished = true;
-    _autoStop?.cancel();
-    if (mounted) setState(() => _listening = false);
-    final text = _heard.trim();
-    if (text.isEmpty) {
-      _toast('没听清，再说一次，或者直接打字');
-      return;
-    }
-    _parseText(text);
-  }
-
-  void _onSpeechError(String? msg) {
-    _autoStop?.cancel();
-    _finished = true;
-    if (mounted) setState(() => _listening = false);
-    _toast('语音没成功（${msg ?? '未知原因'}），可以直接打字');
-  }
-
-  // ---------- 记账 ----------
+  // ---------- 记账（打字 → 智能识别）----------
   Future<void> _parseText(String text) async {
     final t = text.trim();
     if (t.isEmpty) {
@@ -175,7 +65,6 @@ class _RecordScreenState extends State<RecordScreen> {
     final saved = await _showConfirm(r);
     if (saved == true) {
       _input.clear();
-      _heard = '';
       try {
         await reminder.refresh();
       } catch (_) {}
@@ -223,27 +112,18 @@ class _RecordScreenState extends State<RecordScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
       children: [
         if (_accounts.isEmpty) _noAccountCard(),
-        // 输入框 + 麦克风（在输入框右侧）+ 记账
+        // 输入框（打字 → 智能识别）+ 记账
         Row(
           children: [
             Expanded(
               child: TextField(
                 controller: _input,
                 decoration: InputDecoration(
-                  hintText: _listening ? '正在听…说完点一下麦克风' : '说一句或打一句，如：昨天中午吃麦当劳花了三十二',
+                  hintText: '随便输入，智能识别　例：昨天中午吃麦当劳花了32',
                   hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
                   border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
                   isDense: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  suffixIcon: IconButton(
-                    tooltip: _listening ? '结束' : '语音记账',
-                    onPressed: _toggleVoice,
-                    icon: Icon(
-                      _listening ? Icons.stop_circle : Icons.mic_none,
-                      size: 24,
-                      color: _listening ? const Color(0xFFDC2626) : const Color(0xFF2563EB),
-                    ),
-                  ),
                 ),
                 onSubmitted: _parseText,
               ),
@@ -253,9 +133,9 @@ class _RecordScreenState extends State<RecordScreen> {
           ],
         ),
         const SizedBox(height: 6),
-        Text(
-          _listening ? '正在聆听…说完再点一下麦克风' : '点输入框右边的麦克风开始，说完再点一下结束',
-          style: TextStyle(fontSize: 12, color: _listening ? const Color(0xFFDC2626) : const Color(0xFF9CA3AF)),
+        const Text(
+          '直接打字就能记，App 会自动识别金额、分类和日期',
+          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
         ),
         const SizedBox(height: 20),
         Row(

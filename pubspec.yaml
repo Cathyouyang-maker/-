@@ -1,7 +1,7 @@
 name: jizhang
 description: 极简记账 - 个人离线记账 App
 publish_to: 'none'
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -11,7 +11,6 @@ dependencies:
     sdk: flutter
   sqflite: ^2.3.3
   path: ^1.9.0
-  speech_to_text: ^6.6.2
   flutter_local_notifications: ^17.2.2
   timezone: ^0.9.4
 

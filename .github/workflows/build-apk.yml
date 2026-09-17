@@ -24,27 +24,19 @@ jobs:
       - name: Generate Android platform files
         run: flutter create . --platforms android --org com.jizhang --project-name jizhang
 
-      - name: Patch Android manifest (权限 + 语音可见性 + 应用名)
+      - name: Patch Android manifest (权限 + 应用名)
         run: |
           python3 - <<'PY'
           import re
           p = 'android/app/src/main/AndroidManifest.xml'
           s = open(p, encoding='utf-8').read()
-          perms = ('<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n'
-                   '    <uses-permission android:name="android.permission.INTERNET"/>\n'
-                   '    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>\n'
+          perms = ('<uses-permission android:name="android.permission.INTERNET"/>\n'
                    '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
                    '    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n'
                    '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n'
                    '    <uses-permission android:name="android.permission.VIBRATE"/>\n')
-          # Android 11+ 必须声明语音识别服务的可见性，否则 release 包 initialize() 直接失败（点了没反应）
-          queries = ('    <queries>\n'
-                     '        <intent>\n'
-                     '            <action android:name="android.speech.RecognitionService" />\n'
-                     '        </intent>\n'
-                     '    </queries>\n')
-          if 'RECORD_AUDIO' not in s:
-              s = s.replace('<application', perms + queries + '    <application', 1)
+          if 'POST_NOTIFICATIONS' not in s:
+              s = s.replace('<application', perms + '    <application', 1)
           s = re.sub(r'android:label="[^"]*"', 'android:label="极简记账"', s)
           open(p, 'w', encoding='utf-8').write(s)
           print('----- manifest -----')
