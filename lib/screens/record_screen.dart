@@ -87,7 +87,7 @@ class _RecordScreenState extends State<RecordScreen> {
       _heard = '';
       if (mounted) setState(() => _listening = true);
       await _speech.listen(
-        localeId: _zhLocale(),
+        localeId: await _zhLocale(),
         onResult: (r) {
           final t = r.recognizedWords.toString();
           if (t.isNotEmpty) {
@@ -115,9 +115,10 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   /// 中文识别器（找不到就用系统默认）
-  String? _zhLocale() {
+  Future<String?> _zhLocale() async {
     try {
-      for (final l in _speech.locales()) {
+      final locales = await _speech.locales();
+      for (final l in locales) {
         if (l.localeId.toLowerCase().startsWith('zh')) return l.localeId;
       }
     } catch (_) {}
