@@ -75,6 +75,18 @@ class AppDb {
     return rows.map(Txn.fromMap).toList();
   }
 
+  /// 某账户相关的所有流水（含转入/转出），按时间倒序
+  Future<List<Txn>> txnsByAccount(String accountId) async {
+    final db = await database;
+    final rows = await db.query(
+      'txns',
+      where: 'account_id = ? OR to_account_id = ?',
+      whereArgs: [accountId, accountId],
+      orderBy: 'date DESC',
+    );
+    return rows.map(Txn.fromMap).toList();
+  }
+
   /// 余额变动：sign=+1 入账 / -1 冲销
   Future<void> _applyBalance(DatabaseExecutor db, Txn t, int sign) async {
     if (t.type == TxnType.transfer) {

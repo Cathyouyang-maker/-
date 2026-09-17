@@ -7,6 +7,7 @@ import '../data/categories.dart';
 import '../services/database.dart';
 import '../widgets/charts.dart';
 import '../widgets/account_sheet.dart';
+import '../screens/account_detail_screen.dart';
 
 class AccountsScreen extends StatefulWidget {
   const AccountsScreen({super.key});
@@ -37,6 +38,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
   Future<void> _showAccountSheet(Account? a) async {
     await showAccountSheet(context, account: a);
+    await _load();
+  }
+
+  Future<void> _openDetail(Account a) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => AccountDetailScreen(account: a)));
     await _load();
   }
 
@@ -115,6 +121,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
               else
                 ..._accounts.map((a) => ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                      onTap: () => _openDetail(a),
                       title: Text(a.name),
                       subtitle: Text('币种 ${a.currency}', style: const TextStyle(fontSize: 12)),
                       trailing: Row(

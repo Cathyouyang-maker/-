@@ -110,18 +110,38 @@ class BarBucket {
   BarBucket(this.label, this.expense, this.income);
 }
 
-class BarChartView extends StatelessWidget {
+class BarChartView extends StatefulWidget {
   final List<BarBucket> buckets;
   final String mode; // both / expense / income
   const BarChartView({super.key, required this.buckets, this.mode = 'both'});
+  @override
+  State<BarChartView> createState() => _BarChartViewState();
+}
+
+class _BarChartViewState extends State<BarChartView> {
+  int? _hover;
+  static const double _slot = 30.0;
+  static const double _padX = 10.0;
+  static const double _tipW = 124.0;
+
+  int? _indexFromDx(double dx) {
+    final i = ((dx - _padX) / _slot).floor();
+    if (i < 0 || i >= widget.buckets.length) return null;
+    return i;
+  }
+
+  void _onPos(Offset p) => setState(() => _hover = _indexFromDx(p.dx));
+  void _onEnd(_) => setState(() => _hover = null);
 
   @override
   Widget build(BuildContext context) {
-    if (buckets.isEmpty) {
+    if (widget.buckets.isEmpty) {
       return const Center(child: Padding(padding: EdgeInsets.all(20), child: Text('暂无数据', style: TextStyle(color: Colors.grey))));
     }
-    final slot = 30.0;
-    final width = math.max(buckets.length * slot + 20, 280.0);
+    final slot = _slot;
+    final width = math.max(widget.buckets.length * slot + 20, 280.0);
+    final buckets = widget.buckets;
+    final h = _hover != null && _hover! < buckets.length ? buckets[_hover!] : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -130,27 +150,67 @@ class BarChartView extends StatelessWidget {
           child: SizedBox(
             width: width,
             height: 210,
-            child: CustomPaint(painter: _BarPainter(buckets, mode, slot)),
+            child: GestureDetector(
+              onLongPressStart: (d) => _onPos(d.localPosition),
+              onLongPressMoveUpdate: (d) => _onPos(d.localPosition),
+              onLongPressEnd: _onEnd,
+              child: Stack(
+                children: [
+                  CustomPaint(painter: _BarPainter(buckets, widget.mode, slot), size: Size(width, 210)),
+                  if (h != null)
+                    Positioned(top: 2, left: _tipLeft(_hover!, width), child: _tooltip(h)),
+                ],
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 4),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (mode != 'income') ...[
+            if (widget.mode != 'income') ...[
               _dot(kExpense),
               const SizedBox(width: 4),
               const Text('支出', style: TextStyle(fontSize: 12, color: Colors.grey)),
               const SizedBox(width: 14),
             ],
-            if (mode != 'expense') ...[
+            if (widget.mode != 'expense') ...[
               _dot(kIncome),
               const SizedBox(width: 4),
               const Text('收入', style: TextStyle(fontSize: 12, color: Colors.grey)),
             ],
           ],
         ),
+        const SizedBox(height: 4),
+        const Padding(
+          padding: EdgeInsets.only(left: 2),
+          child: Text('长按柱形查看具体数字', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+        ),
       ],
+    );
+  }
+
+  double _tipLeft(int i, double width) {
+    final cx = _padX + i * _slot + _slot / 2;
+    var left = cx - _tipW / 2;
+    if (left < 0) left = 0;
+    if (left > width - _tipW) left = width - _tipW;
+    return left;
+  }
+
+  Widget _tooltip(BarBucket b) {
+    final items = <Widget>[Text(b.label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))];
+    if (widget.mode != 'income') items.add(Text('支出 ¥${fmtNum(b.expense)}', style: const TextStyle(color: kExpense, fontSize: 12)));
+    if (widget.mode != 'expense') items.add(Text('收入 ¥${fmtNum(b.income)}', style: TextStyle(color: kIncome, fontSize: 12)));
+    return Container(
+      width: _tipW,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: items),
     );
   }
 
