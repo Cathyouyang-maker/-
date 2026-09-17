@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -166,14 +167,8 @@ class AppDb {
     bumpData();
   }
 
-  // ---------- 备份 / 恢复（文件，存到手机外部存储）----------
-  Future<String> _backupDir() async {
-    final base = await getExternalStorageDirectory();
-    if (base == null) throw Exception('无法访问外部存储');
-    final d = Directory(p.join(base.path, '极简记账备份'));
-    if (!await d.exists()) await d.create(recursive: true);
-    return d.path;
-  }
+  // ---------- 备份 / 恢复（写进系统“下载”文件夹，卸载也保留）----------
+  static const MethodChannel _backupChan = MethodChannel('com.jizhang.app/backup');
 
   String _ts() {
     final n = DateTime.now();
@@ -181,19 +176,33 @@ class AppDb {
     return '${n.year}${p2(n.month)}${p2(n.day)}_${p2(n.hour)}${p2(n.minute)}${p2(n.second)}';
   }
 
-  /// 生成 JSON 备份文件，返回完整路径（覆盖安装后该文件仍在）
+  /// 生成 JSON 备份文件。Android 写进“下载/极简记账备份”，返回给人看的路径说明。
   Future<String> backupToFile() async {
-    final dir = await _backupDir();
-    final file = File(p.join(dir, '极简记账_${_ts()}.json'));
-    await file.writeAsString(await exportJson());
-    return file.path;
+    final name = '极简记账_${_ts()}.json';
+    final content = await exportJson();
+    if (Platform.isAndroid) {
+      await _backupChan.invokeMethod('backupSave', {'name': name, 'content': content});
+      return '下载/极简记账备份/$name';
+    }
+    // 桌面调试回退：文档目录
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File(p.join(dir.path, name));
+    await f.writeAsString(content);
+    return f.path;
   }
 
   /// 列出已有备份文件名（新的在前）
   Future<List<String>> listBackups() async {
     try {
-      final dir = await _backupDir();
-      final files = Directory(dir)
+      if (Platform.isAndroid) {
+        final r = await _backupChan.invokeMethod<List<dynamic>>('backupList');
+        final list = (r ?? []).map((e) => e.toString()).toList();
+        list.sort((a, b) => b.compareTo(a));
+        return list;
+      }
+      final dir = await getApplicationDocumentsDirectory();
+      if (!await dir.exists()) return [];
+      final files = dir
           .listSync()
           .whereType<File>()
           .where((f) => f.path.endsWith('.json'))
@@ -207,8 +216,11 @@ class AppDb {
   }
 
   Future<String> readBackup(String fileName) async {
-    final dir = await _backupDir();
-    return File(p.join(dir, fileName)).readAsString();
+    if (Platform.isAndroid) {
+      return await _backupChan.invokeMethod('backupRead', {'name': fileName});
+    }
+    final dir = await getApplicationDocumentsDirectory();
+    return File(p.join(dir.path, fileName)).readAsString();
   }
 
   /// 从 JSON 文本恢复（先清空再写入，谨慎使用）

@@ -24,6 +24,14 @@ jobs:
       - name: Generate Android platform files
         run: flutter create . --platforms android --org com.jizhang --project-name jizhang
 
+      - name: Inject backup MethodChannel (MainActivity)
+        run: |
+          set -e
+          DST="android/app/src/main/kotlin/com/jizhang/jizhang/MainActivity.kt"
+          mkdir -p "$(dirname "$DST")"
+          cp android_overrides/MainActivity.kt "$DST"
+          echo "MainActivity.kt injected"
+
       - name: Patch Android manifest (权限 + 应用名)
         run: |
           python3 - <<'PY'
