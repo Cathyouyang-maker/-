@@ -1,8 +1,12 @@
 // ===== 极简记账 · SQLite 存储 + 余额/冲销/导出 =====
 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../models.dart';
 
 /// 数据版本号：任何一次写库（增/改/删）都会 +1。
@@ -159,6 +163,74 @@ class AppDb {
     final db = await database;
     await db.delete('txns');
     await db.delete('accounts');
+    bumpData();
+  }
+
+  // ---------- 备份 / 恢复（文件，存到手机外部存储）----------
+  Future<String> _backupDir() async {
+    final base = await getExternalStorageDirectory();
+    if (base == null) throw Exception('无法访问外部存储');
+    final d = Directory(p.join(base.path, '极简记账备份'));
+    if (!await d.exists()) await d.create(recursive: true);
+    return d.path;
+  }
+
+  String _ts() {
+    final n = DateTime.now();
+    final p2 = (int v) => v.toString().padLeft(2, '0');
+    return '${n.year}${p2(n.month)}${p2(n.day)}_${p2(n.hour)}${p2(n.minute)}${p2(n.second)}';
+  }
+
+  /// 生成 JSON 备份文件，返回完整路径（覆盖安装后该文件仍在）
+  Future<String> backupToFile() async {
+    final dir = await _backupDir();
+    final file = File(p.join(dir, '极简记账_${_ts()}.json'));
+    await file.writeAsString(await exportJson());
+    return file.path;
+  }
+
+  /// 列出已有备份文件名（新的在前）
+  Future<List<String>> listBackups() async {
+    try {
+      final dir = await _backupDir();
+      final files = Directory(dir)
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.json'))
+          .map((f) => p.basename(f.path))
+          .toList();
+      files.sort((a, b) => b.compareTo(a));
+      return files;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<String> readBackup(String fileName) async {
+    final dir = await _backupDir();
+    return File(p.join(dir, fileName)).readAsString();
+  }
+
+  /// 从 JSON 文本恢复（先清空再写入，谨慎使用）
+  Future<void> restoreFromJson(String text) async {
+    final data = jsonDecode(text) as Map<String, dynamic>;
+    final accs = (data['accounts'] as List? ?? [])
+        .map((e) => Account.fromMap(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    final txns = (data['txns'] as List? ?? [])
+        .map((e) => Txn.fromMap(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete('txns');
+      await txn.delete('accounts');
+      for (final a in accs) {
+        await txn.insert('accounts', a.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final t in txns) {
+        await txn.insert('txns', t.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
     bumpData();
   }
 

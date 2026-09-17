@@ -72,6 +72,65 @@ class _AccountsScreenState extends State<AccountsScreen> {
     }
   }
 
+  Future<void> _backup() async {
+    try {
+      final path = await appDb.backupToFile();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已生成备份文件：\n$path', maxLines: 4), duration: const Duration(seconds: 4)),
+        );
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('备份失败：$e')));
+    }
+  }
+
+  Future<void> _restore() async {
+    final files = await appDb.listBackups();
+    if (files.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('还没有备份文件，先点“备份数据”')));
+      }
+      return;
+    }
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('恢复数据'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: files.map((f) => ListTile(title: Text(f), onTap: () => Navigator.pop(c, f))).toList(),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('取消'))],
+      ),
+    );
+    if (chosen == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('确认恢复？'),
+        content: const Text('将用该备份覆盖当前所有账户和流水，确定继续？（建议先再备一份）'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('恢复', style: TextStyle(color: kExpense))),
+        ],
+      ),
+    );
+    if (ok == true) {
+      try {
+        final text = await appDb.readBackup(chosen);
+        await appDb.restoreFromJson(text);
+        await _load();
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('恢复成功')));
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('恢复失败：$e')));
+      }
+    }
+  }
+
   Future<void> _clearAll() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -143,8 +202,14 @@ class _AccountsScreenState extends State<AccountsScreen> {
         const SizedBox(height: 12),
         Row(
           children: [
-            Expanded(child: OutlinedButton(onPressed: () => _export(true), child: const Text('备份数据'))),
+            Expanded(child: OutlinedButton(onPressed: _backup, child: const Text('备份数据'))),
             const SizedBox(width: 8),
+            Expanded(child: OutlinedButton(onPressed: _restore, child: const Text('恢复数据'))),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
             Expanded(child: OutlinedButton(onPressed: () => _export(false), child: const Text('导出表格'))),
           ],
         ),
