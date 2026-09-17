@@ -1,8 +1,14 @@
 // ===== 极简记账 · SQLite 存储 + 余额/冲销/导出 =====
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import '../models.dart';
+
+/// 数据版本号：任何一次写库（增/改/删）都会 +1。
+/// 界面监听它，一旦变化就重新读库，避免「记完账报表/明细/余额不刷新」。
+final ValueNotifier<int> dataVersion = ValueNotifier<int>(0);
+void bumpData() => dataVersion.value++;
 
 class AppDb {
   Database? _db;
@@ -53,11 +59,13 @@ class AppDb {
   Future<void> upsertAccount(Account a) async {
     final db = await database;
     await db.insert('accounts', a.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    bumpData();
   }
 
   Future<void> deleteAccount(String id) async {
     final db = await database;
     await db.delete('accounts', where: 'id = ?', whereArgs: [id]);
+    bumpData();
   }
 
   // ---------- 流水 ----------
@@ -90,6 +98,7 @@ class AppDb {
         await txn.update('txns', {'refunded': 1}, where: 'id = ?', whereArgs: [t.refundOf]);
       }
     });
+    bumpData();
   }
 
   Future<void> deleteTxn(String id) async {
@@ -104,6 +113,7 @@ class AppDb {
       }
       await txn.delete('txns', where: 'id = ?', whereArgs: [id]);
     });
+    bumpData();
   }
 
   Future<void> updateTxn(Txn next) async {
@@ -121,6 +131,7 @@ class AppDb {
         if (next.refundOf != null) await txn.update('txns', {'refunded': 1}, where: 'id = ?', whereArgs: [next.refundOf]);
       }
     });
+    bumpData();
   }
 
   Future<double> totalAssets() async {
@@ -136,6 +147,7 @@ class AppDb {
     final db = await database;
     await db.delete('txns');
     await db.delete('accounts');
+    bumpData();
   }
 
   // ---------- 导出 ----------

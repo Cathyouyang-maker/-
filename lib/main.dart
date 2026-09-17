@@ -76,13 +76,17 @@ class _HomePageState extends State<HomePage> {
   int _index = 0;
 
   static const _titles = ['极简记账', '报表', '明细', '账户'];
-  final _pages = const [RecordScreen(), ReportScreen(), DetailScreen(), AccountsScreen()];
+  final _pages = [RecordScreen(), ReportScreen(), DetailScreen(), AccountsScreen()];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(_titles[_index], style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1F2937)))),
-      body: IndexedStack(index: _index, children: _pages),
+      // 切 Tab 重建页面；任何一次记账/修改/删除（dataVersion 变化）也重建 → 数据永远是最新的
+      body: ValueListenableBuilder<int>(
+        valueListenable: dataVersion,
+        builder: (_, ver, __) => KeyedSubtree(key: ValueKey('$ver-$_index'), child: _pages[_index]),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),

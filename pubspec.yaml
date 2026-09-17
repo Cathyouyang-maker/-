@@ -1,7 +1,7 @@
 name: jizhang
 description: 极简记账 - 个人离线记账 App
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.2+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

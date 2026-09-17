@@ -1,5 +1,7 @@
 // ===== 极简记账 · 记一笔（语音/文字 → 解析 → 确认）=====
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import '../models.dart';
@@ -8,6 +10,8 @@ import '../services/database.dart';
 import '../services/parser.dart';
 import '../services/notifications.dart';
 import '../widgets/charts.dart';
+import '../widgets/account_sheet.dart';
+import '../widgets/edit_sheet.dart';
 
 class RecordScreen extends StatefulWidget {
   const RecordScreen({super.key});
@@ -21,6 +25,10 @@ class _RecordScreenState extends State<RecordScreen> {
   final TextEditingController _input = TextEditingController();
   final SpeechToText _speech = SpeechToText();
   bool _listening = false;
+  bool _busy = false;
+  bool _speechInited = false;
+  String _heard = '';
+  Timer? _autoStop;
 
   @override
   void initState() {
@@ -28,50 +36,131 @@ class _RecordScreenState extends State<RecordScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _autoStop?.cancel();
+    _input.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
-    _accounts = await appDb.accounts();
-    final all = await appDb.txns();
-    final now = DateTime.now();
-    _today = all
-        .where((t) => t.date.year == now.year && t.date.month == now.month && t.date.day == now.day)
-        .toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+    try {
+      _accounts = await appDb.accounts();
+      final all = await appDb.txns();
+      final now = DateTime.now();
+      _today = all
+          .where((t) => t.date.year == now.year && t.date.month == now.month && t.date.day == now.day)
+          .toList()
+        ..sort((a, b) => b.date.compareTo(a.date));
+    } catch (e) {
+      debugPrint('读数据失败: $e');
+    }
     if (mounted) setState(() {});
   }
 
-  Future<void> _startListening() async {
-    final ok = _speech.isAvailable ? true : await _speech.initialize();
-    if (!ok) {
-      _toast('当前设备不支持语音，请用输入框');
+  // ---------- 语音：点一下开始，再点一下结束 ----------
+  Future<void> _toggleVoice() async {
+    if (_listening) {
+      await _stopVoice();
+    } else {
+      await _startVoice();
+    }
+  }
+
+  Future<void> _startVoice() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      if (!_speechInited) {
+        final ok = await _speech.initialize(
+          onError: (e) => _onSpeechError(e.errorMsg),
+          onStatus: (s) {
+            if (s == 'done' || s == 'notListening') _finishVoice();
+          },
+        );
+        _speechInited = true;
+        if (!ok) {
+          _toast('语音用不了：请到手机「设置 → 应用 → 极简记账 → 权限」打开麦克风；也可以直接在下面打字');
+          return;
+        }
+      }
+      _heard = '';
+      if (mounted) setState(() => _listening = true);
+      await _speech.listen(
+        localeId: _zhLocale(),
+        onResult: (r) {
+          final t = r.recognizedWords.toString();
+          if (t.isNotEmpty) {
+            _heard = t;
+            if (mounted) setState(() => _input.text = t);
+          }
+          if (r.finalResult) _finishVoice();
+        },
+      );
+      _autoStop?.cancel();
+      _autoStop = Timer(const Duration(seconds: 30), _stopVoice);
+    } catch (e) {
+      if (mounted) setState(() => _listening = false);
+      _toast('语音启动失败：$e');
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _stopVoice() async {
+    try {
+      await _speech.stop();
+    } catch (_) {}
+    _finishVoice();
+  }
+
+  /// 中文识别器（找不到就用系统默认）
+  String? _zhLocale() {
+    try {
+      for (final l in _speech.locales()) {
+        if (l.localeId.toLowerCase().startsWith('zh')) return l.localeId;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  void _finishVoice() {
+    if (!_listening) return;
+    _autoStop?.cancel();
+    if (mounted) setState(() => _listening = false);
+    final text = _heard.trim();
+    if (text.isEmpty) {
+      _toast('没听清，再说一次，或者直接打字');
       return;
     }
-    setState(() => _listening = true);
-    await _speech.listen(
-      localeId: 'zh_CN',
-      onResult: (r) {
-        if (r.finalResult) {
-          setState(() => _listening = false);
-          _parseText(r.recognizedWords);
-        }
-      },
-    );
+    _parseText(text);
   }
 
-  Future<void> _stopListening() async {
-    await _speech.stop();
+  void _onSpeechError(String? msg) {
+    _autoStop?.cancel();
     if (mounted) setState(() => _listening = false);
+    _toast('语音没成功（${msg ?? '未知原因'}），可以直接打字');
   }
 
+  // ---------- 记账 ----------
   Future<void> _parseText(String text) async {
-    if (text.trim().isEmpty) {
+    final t = text.trim();
+    if (t.isEmpty) {
       _toast('先说一句或打一句');
       return;
     }
-    final r = parse(text, _accounts);
+    try {
+      _accounts = await appDb.accounts(); // 保证账户是最新的
+    } catch (_) {}
+    if (!mounted) return;
+    final r = parse(t, _accounts);
     final saved = await _showConfirm(r);
     if (saved == true) {
       _input.clear();
-      await reminder.refresh();
+      _heard = '';
+      try {
+        await reminder.refresh();
+      } catch (_) {}
       await _load();
     }
   }
@@ -84,62 +173,59 @@ class _RecordScreenState extends State<RecordScreen> {
       builder: (_) => _ConfirmSheet(initial: r, accounts: _accounts),
     );
     if (txn != null) {
-      await appDb.addTxn(txn);
+      try {
+        await appDb.addTxn(txn);
+      } catch (e) {
+        _toast('保存失败：$e');
+        return null;
+      }
       return true;
     }
     return null;
   }
 
+  Future<void> _newAccount() async {
+    await showAccountSheet(context);
+    await _load();
+  }
+
+  Future<void> _editTxn(Txn t) async {
+    final changed = await showEditSheet(context, t, _accounts);
+    if (changed == true) await _load();
+  }
+
   void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 1)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
   }
 
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
       children: [
-        // 麦克风
-        Center(
-          child: Column(
-            children: [
-              GestureDetector(
-                onTapDown: (_) => _startListening(),
-                onTapUp: (_) => _stopListening(),
-                onTapCancel: _stopListening,
-                child: Container(
-                  width: 116,
-                  height: 116,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: _listening
-                          ? const [Color(0xFF1D4ED8), Color(0xFF1E40AF)]
-                          : const [Color(0xFF3B82F6), Color(0xFF2563EB), Color(0xFF1D4ED8)],
-                    ),
-                    boxShadow: const [BoxShadow(color: Color(0x592563EB), blurRadius: 24, offset: Offset(0, 10))],
-                  ),
-                  child: const Icon(Icons.mic_none, color: Colors.white, size: 48),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Text(_listening ? '正在聆听，松手结束…' : '按住说话，松手自动记账', style: const TextStyle(color: Colors.grey, fontSize: 13)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        // 输入框
+        if (_accounts.isEmpty) _noAccountCard(),
+        // 输入框 + 麦克风（在输入框右侧）+ 记账
         Row(
           children: [
             Expanded(
               child: TextField(
                 controller: _input,
-                decoration: const InputDecoration(
-                  hintText: '打字兜底，例如：昨天中午吃麦当劳花了三十二',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+                decoration: InputDecoration(
+                  hintText: _listening ? '正在听…说完点一下麦克风' : '说一句或打一句，如：昨天中午吃麦当劳花了三十二',
+                  hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                  border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
                   isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  suffixIcon: IconButton(
+                    tooltip: _listening ? '结束' : '语音记账',
+                    onPressed: _toggleVoice,
+                    icon: Icon(
+                      _listening ? Icons.stop_circle : Icons.mic_none,
+                      size: 24,
+                      color: _listening ? const Color(0xFFDC2626) : const Color(0xFF2563EB),
+                    ),
+                  ),
                 ),
                 onSubmitted: _parseText,
               ),
@@ -148,10 +234,21 @@ class _RecordScreenState extends State<RecordScreen> {
             ElevatedButton(onPressed: () => _parseText(_input.text), child: const Text('记账')),
           ],
         ),
-        const SizedBox(height: 20),
-        // 今日流水
-        const Text('今日流水', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
+        Text(
+          _listening ? '正在聆听…说完再点一下麦克风' : '点输入框右边的麦克风开始，说完再点一下结束',
+          style: TextStyle(fontSize: 12, color: _listening ? const Color(0xFFDC2626) : const Color(0xFF9CA3AF)),
+        ),
+        const SizedBox(height: 20),
+        Row(
+          children: [
+            const Text('今日流水', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            const Spacer(),
+            if (_today.isNotEmpty)
+              const Text('点一笔可修改 / 删除', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ],
+        ),
+        const SizedBox(height: 4),
         if (_today.isEmpty)
           const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text('今天还没记账', style: TextStyle(color: Colors.grey)))
         else
@@ -160,26 +257,52 @@ class _RecordScreenState extends State<RecordScreen> {
     );
   }
 
+  Widget _noAccountCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+      decoration: BoxDecoration(color: const Color(0xFFE8EFFF), borderRadius: BorderRadius.circular(12)),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('还没有账户', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF1D4ED8))),
+                SizedBox(height: 2),
+                Text('先建一个（现金 / 微信 / 支付宝都行），才记得了账', style: TextStyle(fontSize: 12, color: Color(0xFF3B5BDB))),
+              ],
+            ),
+          ),
+          TextButton(onPressed: _newAccount, child: const Text('建账户')),
+        ],
+      ),
+    );
+  }
+
   Widget _txnTile(Txn t) {
     final sign = t.type == TxnType.expense ? '-' : (t.type == TxnType.income ? '+' : '');
     final color = t.type == TxnType.expense
         ? kExpense
         : (t.type == TxnType.income ? kIncome : Colors.grey);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_catLabel(t), style: const TextStyle(fontWeight: FontWeight.w600)),
-                Text(_noteText(t), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-              ],
+    return InkWell(
+      onTap: () => _editTxn(t),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_catLabel(t), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(_noteText(t), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                ],
+              ),
             ),
-          ),
-          Text('$sign${fmtNum(t.amount)}', style: TextStyle(fontWeight: FontWeight.w700, color: color)),
-        ],
+            Text('$sign${fmtNum(t.amount)}', style: TextStyle(fontWeight: FontWeight.w700, color: color)),
+          ],
+        ),
       ),
     );
   }
@@ -217,19 +340,21 @@ class _ConfirmSheetState extends State<_ConfirmSheet> {
   String _note = '';
   String? _refundOf;
   List<Txn> _recentExpenses = [];
+  late List<Account> _accs;
   final TextEditingController _amountCtrl = TextEditingController();
   final TextEditingController _noteCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _accs = [...widget.accounts];
     _type = widget.initial.type;
     _amount = widget.initial.amount ?? 0;
     _amountCtrl.text = _amount == 0 ? '' : _amount.toString();
     _c1 = widget.initial.category1 ?? defaultC1For(_type);
     _c2 = widget.initial.category2 ?? defaultC2(_c1);
-    _accountId = widget.initial.accountId ?? (widget.accounts.isNotEmpty ? widget.accounts.first.id : '');
-    _toAccountId = widget.initial.toAccountId ?? (widget.accounts.isNotEmpty ? widget.accounts.first.id : '');
+    _accountId = widget.initial.accountId ?? (_accs.isNotEmpty ? _accs.first.id : '');
+    _toAccountId = widget.initial.toAccountId ?? (_accs.isNotEmpty ? _accs.first.id : '');
     _date = widget.initial.date;
     _note = widget.initial.note;
     _noteCtrl.text = _note;
@@ -244,13 +369,30 @@ class _ConfirmSheetState extends State<_ConfirmSheet> {
   }
 
   Future<void> _loadRecent() async {
-    final all = await appDb.txns();
-    _recentExpenses = all.where((t) => t.type == TxnType.expense && !t.refunded && t.refundOf == null).toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+    try {
+      final all = await appDb.txns();
+      _recentExpenses = all.where((t) => t.type == TxnType.expense && !t.refunded && t.refundOf == null).toList()
+        ..sort((a, b) => b.date.compareTo(a.date));
+    } catch (_) {}
     if (mounted) setState(() {});
   }
 
   String defaultC1For(TxnType type) => categoriesFor(type).first.name;
+
+  /// 确认层里也能直接建账户（首次使用最容易卡在这）
+  Future<void> _newAccount() async {
+    final ok = await showAccountSheet(context);
+    if (ok != true) return;
+    final list = await appDb.accounts();
+    if (!mounted) return;
+    setState(() {
+      _accs = list;
+      if (list.isNotEmpty) {
+        if (_accountId.isEmpty) _accountId = list.first.id;
+        if (_toAccountId.isEmpty) _toAccountId = list.first.id;
+      }
+    });
+  }
 
   void _save() {
     if (_amount <= 0) {
@@ -258,7 +400,12 @@ class _ConfirmSheetState extends State<_ConfirmSheet> {
       return;
     }
     if (_type != TxnType.transfer && _accountId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择账户')));
+      if (_accs.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('先建一个账户（钱放在哪儿）')));
+        _newAccount();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择账户')));
+      }
       return;
     }
     if (_type == TxnType.transfer && (_accountId.isEmpty || _toAccountId.isEmpty || _accountId == _toAccountId)) {
@@ -357,7 +504,14 @@ class _ConfirmSheetState extends State<_ConfirmSheet> {
                 ),
               ],
               const SizedBox(height: 12),
-              if (_type != TxnType.transfer)
+              if (_type != TxnType.transfer && _accs.isEmpty)
+                Row(
+                  children: [
+                    const Expanded(child: Text('还没有账户，先建一个', style: TextStyle(color: Color(0xFFDC2626), fontSize: 13))),
+                    TextButton(onPressed: _newAccount, child: const Text('＋ 新建账户')),
+                  ],
+                )
+              else if (_type != TxnType.transfer)
                 _accountDropdown('账户', _accountId, (v) => setState(() => _accountId = v!)),
               const SizedBox(height: 12),
               TextField(
@@ -410,15 +564,15 @@ class _ConfirmSheetState extends State<_ConfirmSheet> {
   }
 
   Widget _accountDropdown(String label, String value, ValueChanged<String?> onChanged) {
-    if (widget.accounts.isEmpty) {
+    if (_accs.isEmpty) {
       return Text('$label：暂无账户', style: const TextStyle(color: Colors.grey, fontSize: 12));
     }
-    final ids = widget.accounts.map((a) => a.id).toList();
+    final ids = _accs.map((a) => a.id).toList();
     final v = ids.contains(value) ? value : ids.first;
     return _labeled(label, DropdownButton<String>(
       value: v,
       isExpanded: true,
-      items: widget.accounts.map((a) => DropdownMenuItem<String>(value: a.id, child: Text('${a.name}（${a.currency}）', overflow: TextOverflow.ellipsis))).toList(),
+      items: _accs.map((a) => DropdownMenuItem<String>(value: a.id, child: Text('${a.name}（${a.currency}）', overflow: TextOverflow.ellipsis))).toList(),
       onChanged: onChanged,
     ));
   }

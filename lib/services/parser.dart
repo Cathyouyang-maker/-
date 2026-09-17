@@ -69,7 +69,7 @@ final _cnNumRe = '[零一二两三四五六七八九十百千万亿]';
 final _cnDigitRe = '[零一二两三四五六七八九]';
 
 AmountHit? extractAmount(String text) {
-  final m1 = RegExp('($_cnNumRe+)[块元]($_cnDigitRe)?[毛角]?').firstMatch(text);
+  final m1 = RegExp('($_cnNumRe+)\\s*[块元]\\s*($_cnDigitRe)?\\s*[毛角]?').firstMatch(text);
   if (m1 != null) {
     final yuan = cnToNum(m1.group(1)!);
     final jiao = m1.group(2) != null ? cnToNum(m1.group(2)!) * 0.1 : 0.0;
@@ -86,11 +86,12 @@ AmountHit? extractAmount(String text) {
     }
     return AmountHit(_r2(n), s);
   }
-  final m3 = RegExp('(\\d+)[块元](\\d)[毛角]?').firstMatch(text);
+  final m3 = RegExp('(\\d+)\\s*[块元]\\s*(\\d)?\\s*[毛角]?').firstMatch(text);
   if (m3 != null) {
-    return AmountHit(_r2(int.parse(m3.group(1)!) + int.parse(m3.group(2)!) * 0.1), m3.group(0)!);
+    final jiao = m3.group(2) != null ? int.parse(m3.group(2)!) * 0.1 : 0.0;
+    return AmountHit(_r2(int.parse(m3.group(1)!) + jiao), m3.group(0)!);
   }
-  final m4 = RegExp('(\\d+(?:\\.\\d+)?)(万|千)?([块元毛角分])?').firstMatch(text);
+  final m4 = RegExp('(\\d+(?:\\.\\d+)?)\\s*(万|千)?\\s*([块元毛角分])?').firstMatch(text);
   if (m4 != null) {
     double n = double.parse(m4.group(1)!);
     if (m4.group(2) == '万') n *= 10000;
@@ -175,13 +176,16 @@ String buildNote(String working) {
   for (final w in sorted) {
     working = working.replaceAll(w, '');
   }
+  // 清掉标点（句号、逗号、括号等）
+  working = working.replaceAll(RegExp(r'[。，、,.!！?？;；:：~～()（）\[\]【】\-—_*#]'), '');
   working = working.replaceAll(RegExp(r'\s+'), '').trim();
   for (final tw in timeOfDay) {
     if (working.contains(tw)) {
-      working = working.replaceAll(tw, ' $tw ').replaceAll(RegExp(r'\s+'), ' ').trim();
+      working = working.replaceAll(tw, ' $tw ').trim();
       break;
     }
   }
+  working = working.replaceAll(RegExp(r'\s+'), ' ').trim();
   return working;
 }
 

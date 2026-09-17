@@ -6,6 +6,7 @@ import '../models.dart';
 import '../data/categories.dart';
 import '../services/database.dart';
 import '../widgets/charts.dart';
+import '../widgets/account_sheet.dart';
 
 class AccountsScreen extends StatefulWidget {
   const AccountsScreen({super.key});
@@ -35,11 +36,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _showAccountSheet(Account? a) async {
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _AccountSheet(account: a),
-    );
+    await showAccountSheet(context, account: a);
     await _load();
   }
 
@@ -152,79 +149,6 @@ class _AccountsScreenState extends State<AccountsScreen> {
           ),
         ),
       ],
-    );
-  }
-}
-
-// ---------- 账户增改 ----------
-class _AccountSheet extends StatefulWidget {
-  final Account? account;
-  const _AccountSheet({this.account});
-  @override
-  State<_AccountSheet> createState() => _AccountSheetState();
-}
-
-class _AccountSheetState extends State<_AccountSheet> {
-  final _name = TextEditingController();
-  final _balance = TextEditingController();
-  String _currency = '¥';
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.account != null) {
-      _name.text = widget.account!.name;
-      _balance.text = widget.account!.balance.toString();
-      _currency = widget.account!.currency;
-    }
-  }
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _balance.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (_name.text.trim().isEmpty) return;
-    await appDb.upsertAccount(Account(
-      id: widget.account?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      name: _name.text.trim(),
-      currency: _currency,
-      balance: double.tryParse(_balance.text) ?? 0,
-    ));
-    if (mounted) Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-        decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.account == null ? '新增账户' : '编辑账户', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 12),
-            TextField(controller: _name, decoration: const InputDecoration(labelText: '账户名（如：现金 / 微信 / 招行卡 / 美金现金）')),
-            const SizedBox(height: 12),
-            DropdownButton<String>(
-              value: _currency,
-              isExpanded: true,
-              items: currencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-              onChanged: (v) => setState(() => _currency = v!),
-            ),
-            const SizedBox(height: 12),
-            TextField(controller: _balance, keyboardType: TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: '当前余额')),
-            const SizedBox(height: 16),
-            SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _save, child: const Text('保存'))),
-          ],
-        ),
-      ),
     );
   }
 }
