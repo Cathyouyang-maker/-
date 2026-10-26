@@ -129,3 +129,14 @@ jobs:
         with:
           name: jizhang-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish APK to GitHub Release (公开直链, 免登录下载)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.8
+          name: 极简记账 v1.0.8+9
+          files: build/app/outputs/flutter-apk/app-release.apk
+          fail_on_unmatched_files: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
