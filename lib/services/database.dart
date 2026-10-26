@@ -16,7 +16,11 @@ import '../models.dart';
 /// 数据版本号：任何一次写库（增/改/删）都会 +1。
 /// 界面监听它，一旦变化就重新读库，避免「记完账报表/明细/余额不刷新」。
 final ValueNotifier<int> dataVersion = ValueNotifier<int>(0);
-void bumpData() => dataVersion.value++;
+void bumpData() {
+  dataVersion.value++;
+  // 每次数据变化都静默自动备份一份（失败也无妨）
+  appDb.autoBackup();
+}
 
 class AppDb {
   Database? _db;
@@ -211,6 +215,41 @@ class AppDb {
       return '下载/极简记账备份/$name';
     }
     // 桌面调试回退：文档目录
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File(p.join(dir.path, name));
+    await f.writeAsString(content);
+    return f.path;
+  }
+
+  /// 自动备份：每次启动 / 每次记账后静默写一份最新数据到“下载/极简记账备份”。
+  /// 该目录卸载 App 也不会清，重装后可经「导入数据 / 恢复数据」找回。
+  /// 内部已吞掉异常，绝不影响正常使用。
+  Future<void> autoBackup() async {
+    try {
+      final content = await exportJson();
+      if (Platform.isAndroid) {
+        await _backupChan.invokeMethod('backupSave', {
+          'name': '极简记账_auto.json',
+          'content': content,
+        });
+      } else {
+        final dir = await getApplicationDocumentsDirectory();
+        final f = File(p.join(dir.path, '极简记账_auto.json'));
+        await f.writeAsString(content);
+      }
+    } catch (_) {
+      // 自动备份失败不应影响正常使用
+    }
+  }
+
+  /// 导出文件：把 JSON 或 CSV 写入“下载/极简记账备份”，返回给人看的路径。
+  Future<String> exportToFile(bool asJson) async {
+    final content = asJson ? await exportJson() : await exportCsv();
+    final name = '极简记账_导出_${_ts()}.${asJson ? 'json' : 'csv'}';
+    if (Platform.isAndroid) {
+      await _backupChan.invokeMethod('backupSave', {'name': name, 'content': content});
+      return '下载/极简记账备份/$name';
+    }
     final dir = await getApplicationDocumentsDirectory();
     final f = File(p.join(dir.path, name));
     await f.writeAsString(content);

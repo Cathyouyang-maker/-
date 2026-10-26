@@ -84,8 +84,15 @@ class _AccountsScreenState extends State<AccountsScreen> {
   Future<void> _export(bool json) async {
     final content = json ? await appDb.exportJson() : await appDb.exportCsv();
     await Clipboard.setData(ClipboardData(text: content));
+    String msg = json ? '已复制备份数据（JSON）到剪贴板' : '已复制表格（CSV）到剪贴板';
+    try {
+      final path = await appDb.exportToFile(json);
+      msg += '\n已另存文件：$path';
+    } catch (e) {
+      msg += '\n（另存文件失败：$e）';
+    }
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(json ? '已复制备份数据（JSON）' : '已复制表格（CSV），可粘贴到 Excel')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg, maxLines: 4)));
     }
   }
 

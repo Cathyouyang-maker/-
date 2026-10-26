@@ -40,6 +40,11 @@ Future<void> _initAsync() async {
     debugPrint('DB 初始化失败: $e');
   }
   try {
+    await appDb.autoBackup();
+  } catch (e) {
+    debugPrint('自动备份失败: $e');
+  }
+  try {
     await reminder.init();
     await reminder.refresh();
   } catch (e) {
