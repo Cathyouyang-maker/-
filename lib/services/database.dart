@@ -26,7 +26,7 @@ class AppDb {
   Future<Database> _open() async {
     final dir = await getDatabasesPath();
     final path = p.join(dir, 'jizhang.db');
-    return openDatabase(path, version: 1, onCreate: (db, v) async {
+    return openDatabase(path, version: 2, onCreate: (db, v) async {
       await db.execute('''
         CREATE TABLE accounts(
           id TEXT PRIMARY KEY,
@@ -51,7 +51,30 @@ class AppDb {
           refunded INTEGER NOT NULL DEFAULT 0
         )
       ''');
+      await db.execute('''
+        CREATE TABLE settings(
+          key TEXT PRIMARY KEY,
+          value TEXT
+        )
+      ''');
+    }, onUpgrade: (db, oldV, newV) async {
+      // 旧版本（v1）没有 settings 表，补建
+      await db.execute('CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)');
     });
+  }
+
+  // ---------- 设置（键值对，持久化提醒开关/时间等）----------
+  Future<String?> getSetting(String key) async {
+    final db = await database;
+    final rows = await db.query('settings', where: 'key = ?', whereArgs: [key], limit: 1);
+    if (rows.isEmpty) return null;
+    return rows.first['value'] as String?;
+  }
+
+  Future<void> setSetting(String key, String value) async {
+    final db = await database;
+    await db.insert('settings', {'key': key, 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   // ---------- 账户 ----------

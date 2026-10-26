@@ -148,12 +148,17 @@ const Map<String, int> _weekIdx = {'一': 0, '二': 1, '三': 2, '四': 3, '五'
   return (date: now, text: '');
 }
 
-// ---------- 分类匹配（最长命中）----------
+// ---------- 分类匹配（最长命中 + 兜底）----------
 final List<List<String>> _dictSorted = [...dict]..sort((a, b) => b[0].length.compareTo(a[0].length));
 
 ({String c1, String c2})? matchCategory(String text) {
+  final t = text.toLowerCase();
   for (final e in _dictSorted) {
-    if (text.contains(e[0])) return (c1: e[1], c2: e[2]);
+    if (t.contains(e[0].toLowerCase())) return (c1: e[1], c2: e[2]);
+  }
+  // 兜底：文本直接包含某个二级分类名（如「吃饭」「买菜」）
+  for (final entry in childCatMap.entries) {
+    if (t.contains(entry.key.toLowerCase())) return (c1: entry.value.$1, c2: entry.value.$2);
   }
   return null;
 }

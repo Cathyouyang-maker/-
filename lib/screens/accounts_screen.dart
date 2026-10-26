@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../models.dart';
 import '../data/categories.dart';
 import '../services/database.dart';
+import '../services/notifications.dart';
 import '../widgets/charts.dart';
 import '../widgets/account_sheet.dart';
 import '../screens/account_detail_screen.dart';
@@ -18,6 +19,9 @@ class AccountsScreen extends StatefulWidget {
 class _AccountsScreenState extends State<AccountsScreen> {
   List<Account> _accounts = [];
   double _total = 0;
+  bool _notifOk = false;
+  bool _reminderOn = true;
+  int _hour = 21;
 
   @override
   void initState() {
@@ -28,8 +32,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
   Future<void> _load() async {
     _accounts = await appDb.accounts();
     _total = await appDb.totalAssets();
+    _notifOk = reminder.permissionGranted;
+    _reminderOn = (await appDb.getSetting('reminder_enabled')) != '0';
+    _hour = int.tryParse(await appDb.getSetting('reminder_hour') ?? '') ?? 21;
     if (mounted) setState(() {});
     if (_accounts.isEmpty) _onboard();
+  }
+
+  Future<void> _requestNotif() async {
+    final ok = await reminder.requestPermission();
+    setState(() => _notifOk = ok);
+    if (ok) await reminder.refresh();
   }
 
   void _onboard() {
@@ -212,6 +225,61 @@ class _AccountsScreenState extends State<AccountsScreen> {
           children: [
             Expanded(child: OutlinedButton(onPressed: () => _export(false), child: const Text('导出表格'))),
           ],
+        ),
+        const SizedBox(height: 16),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('记账提醒', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                if (!_notifOk)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(8)),
+                    child: const Text('未开启通知权限，提醒不会弹出。点下方“请求权限”；如仍无弹窗，请到手机设置→应用→极简记账→通知 中开启。',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF9A3412))),
+                  ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('每天提醒记账'),
+                  subtitle: Text(_notifOk ? '未在 $_hour:00 前记账，当晚提醒' : '需先开启通知权限'),
+                  value: _reminderOn && _notifOk,
+                  onChanged: _notifOk
+                      ? (v) async {
+                          await reminder.setEnabled(v);
+                          setState(() => _reminderOn = v);
+                        }
+                      : null,
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('提醒时间'),
+                  trailing: DropdownButton<int>(
+                    value: _hour,
+                    items: [19, 20, 21, 22]
+                        .map((h) => DropdownMenuItem(value: h, child: Text('$h:00')))
+                        .toList(),
+                    onChanged: (v) async {
+                      if (v != null) {
+                        await reminder.setHour(v);
+                        setState(() => _hour = v);
+                      }
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(onPressed: () => reminder.testNow(), child: const Text('发送测试提醒')),
+                ),
+              ],
+            ),
+          ),
         ),
         const SizedBox(height: 16),
         Center(

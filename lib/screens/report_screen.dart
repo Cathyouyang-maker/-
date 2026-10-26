@@ -5,6 +5,7 @@ import '../models.dart';
 import '../data/categories.dart';
 import '../services/database.dart';
 import '../widgets/charts.dart';
+import 'category_detail_screen.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -86,6 +87,7 @@ class _ReportScreenState extends State<ReportScreen> {
   @override
   Widget build(BuildContext context) {
     final list = _inRange();
+    final r = _range();
     final expense = list.where((t) => t.type == TxnType.expense).fold<double>(0, (s, t) => s + t.amount);
     final income = list.where((t) => t.type == TxnType.income).fold<double>(0, (s, t) => s + t.amount);
 
@@ -170,8 +172,10 @@ class _ReportScreenState extends State<ReportScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('排行榜', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                const Text('点击任意分类，看该分类下的每笔明细', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
                 const SizedBox(height: 8),
-                ..._rank(list),
+                ..._rank(list, r.start, r.end, _label()),
               ],
             ),
           ),
@@ -274,7 +278,7 @@ class _ReportScreenState extends State<ReportScreen> {
     return PieChartView(slices: slices);
   }
 
-  List<Widget> _rank(List<Txn> list) {
+  List<Widget> _rank(List<Txn> list, DateTime start, DateTime end, String periodLabel) {
     final exp = list.where((t) => t.type == TxnType.expense).toList();
     final groups = <String, double>{};
     for (final t in exp) {
@@ -284,17 +288,35 @@ class _ReportScreenState extends State<ReportScreen> {
     final entries = groups.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     if (entries.isEmpty) return const [Text('暂无支出', style: TextStyle(color: Colors.grey))];
     final maxV = entries.first.value;
-    return entries.take(6).map((e) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          children: [
-            SizedBox(width: 20, child: Text('${entries.indexOf(e) + 1}', style: const TextStyle(color: kBlue, fontSize: 12))),
-            Expanded(child: Text(e.key)),
-            Text(fmtNum(e.value), style: const TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(width: 10),
-            SizedBox(width: 60, child: LinearProgressIndicator(value: maxV == 0 ? 0 : e.value / maxV, minHeight: 6, backgroundColor: const Color(0xFFE8EFFF), color: kBlue)),
-          ],
+    return entries.asMap().entries.map((entry) {
+      final idx = entry.key;
+      final e = entry.value;
+      final c1 = _pieLevel == 'c1' ? e.key : null;
+      final c2 = _pieLevel == 'c2' ? e.key : null;
+      return InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CategoryDetailScreen(
+              c1: c1,
+              c2: c2,
+              start: start,
+              end: end,
+              periodLabel: periodLabel,
+            ),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Row(
+            children: [
+              SizedBox(width: 20, child: Text('${idx + 1}', style: const TextStyle(color: kBlue, fontSize: 12))),
+              Expanded(child: Text(e.key)),
+              Text(fmtNum(e.value), style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(width: 10),
+              SizedBox(width: 60, child: LinearProgressIndicator(value: maxV == 0 ? 0 : e.value / maxV, minHeight: 6, backgroundColor: const Color(0xFFE8EFFF), color: kBlue)),
+            ],
+          ),
         ),
       );
     }).toList();
