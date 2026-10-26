@@ -3,11 +3,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:excel/excel.dart';
+import 'package:intl/intl.dart';
 import '../models.dart';
 
 /// 数据版本号：任何一次写库（增/改/删）都会 +1。
@@ -267,6 +270,183 @@ class AppDb {
       }
     });
     bumpData();
+  }
+
+  // ---------- 导入（JSON / Excel / CSV）----------
+
+  /// 从本 App 自己的备份 JSON（{accounts:[...], txns:[...]}）导入。
+  /// 按 id 覆盖（幂等），不会清空其他已有数据，适合“把旧备份搬回来”。
+  Future<({int accounts, int txns})> importJson(String text) async {
+    final decoded = jsonDecode(text);
+    List<dynamic> accRaw;
+    List<dynamic> txnRaw;
+    if (decoded is Map) {
+      accRaw = (decoded['accounts'] as List? ?? []);
+      txnRaw = (decoded['txns'] as List? ?? []);
+    } else if (decoded is List) {
+      accRaw = [];
+      txnRaw = decoded;
+    } else {
+      throw 'JSON 格式无法识别';
+    }
+    final accs = accRaw.map((e) => Account.fromMap(Map<String, dynamic>.from(e as Map))).toList();
+    final txns = txnRaw.map((e) => Txn.fromMap(Map<String, dynamic>.from(e as Map))).toList();
+    final db = await database;
+    int aN = 0, tN = 0;
+    await db.transaction((txn) async {
+      for (final a in accs) {
+        await txn.insert('accounts', a.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+        aN++;
+      }
+      for (final t in txns) {
+        await txn.insert('txns', t.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+        tN++;
+      }
+    });
+    bumpData();
+    return (accounts: aN, txns: tN);
+  }
+
+  /// 从 Excel(.xlsx/.xls) 导入：第一行为表头，按中文/英文列名匹配。
+  Future<({int accounts, int txns})> importExcel(Uint8List bytes) async {
+    final excel = Excel.decodeBytes(bytes);
+    final sheet = excel.tables[excel.tables.keys.first];
+    if (sheet == null) throw 'Excel 里没有工作表';
+    final rows = sheet.rows
+        .map((r) => r.map((c) => c?.value?.toString()?.trim()).toList())
+        .toList();
+    return _importGrid(rows);
+  }
+
+  /// 从 CSV 导入（兼容本 App 导出的带 BOM 表格）。
+  Future<({int accounts, int txns})> importCsv(String text) async {
+    final rows = _parseCsv(text);
+    return _importGrid(rows);
+  }
+
+  Future<({int accounts, int txns})> _importGrid(List<List<String?>> grid) async {
+    if (grid.isEmpty) throw '文件内容为空';
+    final header = grid.first.map((e) => (e ?? '').toLowerCase()).toList();
+    int idx(String zh, String en) {
+      final i = header.indexOf(zh);
+      return i >= 0 ? i : header.indexOf(en);
+    }
+    final ciDate = idx('日期', 'date');
+    final ciType = idx('类型', 'type');
+    final ciAmount = idx('金额', 'amount');
+    final ciC1 = idx('一级分类', 'category1');
+    final ciC2 = idx('二级分类', 'category2');
+    final ciAcc = idx('账户', 'account');
+    final ciTo = idx('转入账户', 'to account');
+    final ciNote = idx('备注', 'note');
+
+    final db = await database;
+    int aN = 0, tN = 0;
+    await db.transaction((txn) async {
+      for (var i = 1; i < grid.length; i++) {
+        final row = grid[i];
+        if (row.every((e) => (e ?? '').isEmpty)) continue;
+        final dateStr = _cell(row, ciDate);
+        final amtStr = _cell(row, ciAmount);
+        if (dateStr.isEmpty || amtStr.isEmpty) continue;
+        final date = _parseDate(dateStr);
+        if (date == null) continue;
+        final type = _parseType(_cell(row, ciType));
+        final amount = double.tryParse(amtStr.replaceAll(',', '')) ?? 0;
+        if (amount == 0) continue;
+
+        var accName = _cell(row, ciAcc);
+        if (accName.isEmpty) accName = '默认账户';
+        final accId = await _ensureAccount(txn, accName, () => 'acc_${DateTime.now().microsecondsSinceEpoch}_${tN}_$aN', () => aN++);
+        String? toId;
+        final toName = _cell(row, ciTo);
+        if (toName.isNotEmpty) {
+          toId = await _ensureAccount(txn, toName, () => 'acc_to${DateTime.now().microsecondsSinceEpoch}_${tN}_$aN', () => aN++);
+        }
+        final t = Txn(
+          id: 'imp_${DateTime.now().microsecondsSinceEpoch}_${tN}_$aN',
+          type: type,
+          amount: amount,
+          category1: _cell(row, ciC1),
+          category2: _cell(row, ciC2),
+          accountId: accId,
+          toAccountId: toId,
+          note: _cell(row, ciNote),
+          date: date,
+          createdAt: date,
+        );
+        await txn.insert('txns', t.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+        await _applyBalance(txn, t, 1);
+        tN++;
+      }
+    });
+    bumpData();
+    return (accounts: aN, txns: tN);
+  }
+
+  /// 按名称找账户，没有就新建（余额 0）。返回账户 id。
+  Future<String> _ensureAccount(DatabaseExecutor txn, String name, String Function() newId, void Function() bump) async {
+    final ex = await txn.query('accounts', where: 'name = ?', whereArgs: [name], limit: 1);
+    if (ex.isNotEmpty) return ex.first['id'] as String;
+    final id = newId();
+    await txn.insert('accounts', Account(id: id, name: name, currency: '¥', balance: 0).toMap());
+    bump();
+    return id;
+  }
+
+  String _cell(List<String?> row, int i) => (i >= 0 && i < row.length) ? (row[i] ?? '').trim() : '';
+
+  DateTime? _parseDate(String s) {
+    s = s.trim();
+    if (RegExp(r'^\d{13}$').hasMatch(s)) return DateTime.fromMillisecondsSinceEpoch(int.parse(s));
+    for (final f in ['yyyy-MM-dd HH:mm:ss', 'yyyy-MM-dd', 'yyyy/MM/dd', 'yyyy.MM.dd']) {
+      final d = DateFormat(f).tryParse(s);
+      if (d != null) return d;
+    }
+    return null;
+  }
+
+  TxnType _parseType(String s) {
+    s = s.trim();
+    if (s == '收入' || s.toLowerCase() == 'income' || s == 'i') return TxnType.income;
+    if (s == '转账' || s.toLowerCase() == 'transfer' || s == 't') return TxnType.transfer;
+    return TxnType.expense;
+  }
+
+  List<List<String?>> _parseCsv(String text) {
+    final out = <List<String?>>[];
+    for (final raw in text.replaceAll('\uFEFF', '').split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      final row = <String?>[];
+      var field = '';
+      var inQ = false;
+      for (var i = 0; i < line.length; i++) {
+        final ch = line[i];
+        if (inQ) {
+          if (ch == '"') {
+            if (i + 1 < line.length && line[i + 1] == '"') {
+              field += '"';
+              i++;
+            } else {
+              inQ = false;
+            }
+          } else {
+            field += ch;
+          }
+        } else if (ch == '"') {
+          inQ = true;
+        } else if (ch == ',') {
+          row.add(field);
+          field = '';
+        } else {
+          field += ch;
+        }
+      }
+      row.add(field);
+      out.add(row);
+    }
+    return out;
   }
 
   // ---------- 导出 ----------

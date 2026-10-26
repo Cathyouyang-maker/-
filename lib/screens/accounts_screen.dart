@@ -1,7 +1,11 @@
 // ===== 极简记账 · 账户（盘点 / 多币种 / 备份 / 清空）=====
 
+import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models.dart';
 import '../data/categories.dart';
 import '../services/database.dart';
@@ -95,6 +99,49 @@ class _AccountsScreenState extends State<AccountsScreen> {
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('备份失败：$e')));
+    }
+  }
+
+  Future<void> _import() async {
+    FilePickerResult? res;
+    try {
+      res = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'xlsx', 'xls', 'csv'],
+        withData: true,
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('无法打开文件选择：$e')));
+      return;
+    }
+    if (res == null || res.files.isEmpty) return;
+    final f = res.files.first;
+    final lower = f.name.toLowerCase();
+    try {
+      late ({int accounts, int txns}) r;
+      late Uint8List bytes;
+      if (f.bytes != null) {
+        bytes = f.bytes!;
+      } else if (f.path != null) {
+        bytes = await File(f.path!).readAsBytes();
+      } else {
+        throw '无法读取所选文件';
+      }
+      if (lower.endsWith('.json')) {
+        r = await appDb.importJson(utf8.decode(bytes));
+      } else if (lower.endsWith('.csv')) {
+        r = await appDb.importCsv(utf8.decode(bytes));
+      } else {
+        r = await appDb.importExcel(bytes);
+      }
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入成功：账户 ${r.accounts} 个，流水 ${r.txns} 笔')),
+        );
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导入失败：$e')));
     }
   }
 
@@ -224,6 +271,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
         Row(
           children: [
             Expanded(child: OutlinedButton(onPressed: () => _export(false), child: const Text('导出表格'))),
+            const SizedBox(width: 8),
+            Expanded(child: OutlinedButton(onPressed: _import, child: const Text('导入数据'))),
           ],
         ),
         const SizedBox(height: 16),
